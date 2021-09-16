@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('../partials/head'); %>
+</head>
+<body class="container">
+
+  <h1><%= test.test %></h1>
+
+  <div id="canvas"></div>
+
+  <script src="https://d3js.org/d3.v3.js"></script>
+  <script src="js/jsnetworkx.js"></script>
+  <script>
+    
+    console.log('<%-host.test%>')
+    topology = <%-host%>
+
+    console.log(topology)
+    let edge = []
+    let check = {}
+    swGroup = Object.keys(topology.switch)  //Keys of switch
+    hostGroup = Object.keys(topology.host)  //Keys of host
+    swlen = swGroup.length                  //Number of sw
+    for (let i = 0; i < swlen; i++) {
+        for (let j = 0; j < swlen - i; j++) {
+            indexSw = topology.switch       //Dict of sw
+            if (indexSw[swGroup[i]].slice(i, swlen)[j] === 1) {
+              edge.push([swGroup[i], swGroup[j+i]])
+            }
+        }
+    }
+
+    for (let i = 0; i<hostGroup.length; i++) {
+      edge.push([hostGroup[i], topology.host[hostGroup[i]]])
+    }
+
+    console.log(edge)
+    var G = new jsnx.Graph();
+  
+    G.addNodesFrom(swGroup, {group:0});
+    G.addNodesFrom(hostGroup, {group:2});
+    G.addEdgesFrom(edge)
+
+    var color = d3.scale.category20();
+    jsnx.draw(G, {
+      element: '#canvas',
+      withLabels: true,
+      layoutAttr: {
+        charge: -120,
+        linkDistance: 120
+      },
+      nodeAttr: {
+        r: 18,
+        title: function(d) { return d.label;}
+        },
+      nodeStyle: {
+        fill: function(d) { 
+          return color(d.data.group); 
+        },
+        stroke: 'none'
+      },
+      stickyDrag: true,
+      labelStyle: {fill: 'white'},
+      edgeStyle: {
+        fill: "#999"
+      }
+    });
+  </script>
+</body>
+</html>
