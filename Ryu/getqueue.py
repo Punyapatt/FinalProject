@@ -1,7 +1,7 @@
 import requests
 import json
 import time
-controllerIP = "103.253.73.175"
+controllerIP = ""
 controllerPort = "8080"
 
 URL = "http://"+controllerIP+":"+controllerPort
