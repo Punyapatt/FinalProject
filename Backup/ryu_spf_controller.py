@@ -35,8 +35,8 @@ from ryu.topology import event, switches
 from networkx.readwrite import json_graph
 from collections import defaultdict
 # from new_mo import run_multi, update_path, add_path
-# from monitor_dl import main_thread, send_newstat, update_path, add_path
-from monitor import main_thread, send_newstat, update_path, add_path
+#from monitor_dl import main_thread, send_newstat, update_path, add_path, send_chat
+from monitor import main_thread, send_newstat, update_path, add_path, send_chat
 import networkx as nx
 import matplotlib.pyplot as plt
 import array
@@ -72,6 +72,13 @@ class SPFController(app_manager.RyuApp):
         self.curr_path = {}
         self.count_flow_move = {}
         self.show_reroute = ''
+        self.src_switch = {}
+        url = "http://10.50.34.27:7777/topology"
+        response = requests.get(url)
+        data = response.json()
+        for i in data['host']:
+            if int(data['host'][i][1:]) not in self.src_switch:
+                self.src_switch[int(data['host'][i][1:])] = []
         self.monitor_thread = hub.spawn(self._monitor)
 
 
@@ -232,7 +239,7 @@ class SPFController(app_manager.RyuApp):
 
             if flow_size <= ai_[list(ai_)[0]]:
                 curr_load = (100/self.bw_[list(ai_)[0]]*(2**20)) - ai_[list(ai_)[0]] # curr_load bits unit
-                percent = (100/self.bw_[list(ai_)[0]]*69)/100
+                percent = (100/self.bw_[list(ai_)[0]]*50)/100
                 percent *= 2**20    # change Mbits to bits
                 print(ai_)
                 print('------')
@@ -252,6 +259,7 @@ class SPFController(app_manager.RyuApp):
                     self.count_flow_move[src+dst] += 1
                     print("\ncurr_path :", self.curr_path, "\n")
                     self.new_route(winner_path, netx, src, dst, 2, True)
+                    send_chat({'flow':str(int(src[-2:]))+" -> "+str(int(dst[-2:]))})
                     for i in range(len(winner_path)-1):
                         netx.get_edge_data(winner_path[i], winner_path[i+1])['ai'] -= flow_size # Update available capacity
                         netx.get_edge_data(winner_path[i], winner_path[i+1])['weight'] = 100 / ((flow_size)/(2**20)) # Update weight
@@ -336,26 +344,30 @@ class SPFController(app_manager.RyuApp):
     # Update flow entry to OVS                  
     def add_new_route(self, dpid, src, dst, out_port, cmd_t0, t0_direct, exc_t2=None):
         # Add or modify table 0
-        print("<-------- s%d table 0 %s----------->"%(dpid, cmd_t0))
-        print("Table 0 direct to [%d]"%(t0_direct))
-        response = requests.post("http://127.0.0.1:8080/stats/flowentry/"+cmd_t0,
-                                 data=json.dumps({
-                                    "dpid": int(dpid),
-                                    "cookie": 0,
-                                    "table_id": 0,
-                                    "priority": 32768,
-                                    "match": {
-                                        "dl_src": src,
-                                        "dl_dst": dst
-                                         },
-                                     "actions": [
-                                        {
-                                            "type": "GOTO_TABLE",
-                                            "table_id": t0_direct
-                                        }
-                                         ]
-                                 }))
-        print("Table 0 :", response, "\n\n")
+        if dpid in self.src_switch and src+dst not in self.src_switch[dpid]:
+            print("\n\nDelete dpid[%d] %s -> %s\n\n"%(dpid, src, dst))
+            self.delete_flow(dpid, src, dst)
+        else:
+            print("<-------- s%d table 0 %s----------->"%(dpid, cmd_t0))
+            print("Table 0 direct to [%d]"%(t0_direct))
+            response = requests.post("http://127.0.0.1:8080/stats/flowentry/"+cmd_t0,
+                                    data=json.dumps({
+                                        "dpid": int(dpid),
+                                        "cookie": 0,
+                                        "table_id": 0,
+                                        "priority": 32768,
+                                        "match": {
+                                            "dl_src": src,
+                                            "dl_dst": dst
+                                            },
+                                        "actions": [
+                                            {
+                                                "type": "GOTO_TABLE",
+                                                "table_id": t0_direct
+                                            }
+                                            ]
+                                    }))
+            print("Table 0 :", response, "\n\n")
         
         if exc_t2:
             print("<-------- s%d table 2----------->"%(dpid))
@@ -381,7 +393,7 @@ class SPFController(app_manager.RyuApp):
                                     }))
             print("Table 2 :", response, "\n\n")
     
-    def delete_flow(self, dpid, src, dst, in_port):
+    def delete_flow(self, dpid, src, dst):
         response = requests.post("http://127.0.0.1:8080/stats/flowentry/delete_strict",
                                     data=json.dumps({
                                         "dpid": int(dpid),
@@ -391,7 +403,6 @@ class SPFController(app_manager.RyuApp):
                                         "hard_timeout": 0,
                                         "priority": 32768,
                                         "match": {
-                                            "in_port": in_port,
                                             "dl_src": src,
                                             "dl_dst": dst
                                         }
@@ -411,6 +422,9 @@ class SPFController(app_manager.RyuApp):
 
     def add_flow(self, datapath, src, dst, out_port):
         print("from add flow :", datapath.id)
+        if datapath.id in self.src_switch:
+            if src+dst not in self.src_switch[datapath.id]:
+                self.src_switch[datapath.id].append(src+dst)
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         match = datapath.ofproto_parser.OFPMatch(eth_src=src, eth_dst=dst)

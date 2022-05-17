@@ -3,17 +3,12 @@ from os import pread
 from this import d
 import requests
 import time
-import numpy as np
 from multiprocessing.dummy import Pool as ThreadPool
 import pandas as pd
 from networkx.readwrite import json_graph
 import networkx as nx
 import os
 import csv
-import tensorflow as tf
-from pickle import load
-from tensorflow import keras
-from sklearn.preprocessing import MinMaxScaler
 
 global interval
 global original_path
@@ -22,24 +17,13 @@ global congest_time
 global congest_count 
 global congest_interval
 global congest_interval_list
-global reconstructed_model
-global timesteps
-global test_list
-global pre_temp
-global before_congest_interval
-global scaler
-reconstructed_model = keras.models.load_model("/home/user01/ryu/ryu/app/work/parallel_lstm_5steps.hdf5")
-scaler = load(open('/home/user01/ryu/ryu/app/work/scaler.pickle', 'rb'))
+
 original_path = dict()
 secondary_path = dict()
 congest_time = dict()
-pre_temp = dict()
 congest_count = 0
 congest_interval = 0
 congest_interval_list = []
-timesteps = 5
-test_list = []
-before_congest_interval = 0
 
 flow_priority = {}
 # {
@@ -93,8 +77,6 @@ def main_thread(G, period):
     global interval
     global original_path
     global secondary_path
-    global pre_temp
-
     interval = period
     graph_e = G
     # send_text({"kit graph":len(graph_e)})
@@ -105,11 +87,7 @@ def main_thread(G, period):
     
     connectivity = find_end2end(graph_e)
     bandwitdth_matrix = find_maxbanwidth(topo)
-    
-    pre_port = perdic_portstat(port, connectivity, timesteps)
-    #portsum = sum_port(port, pre_port)
-    
-    congestList = check_congest(port, pre_port, connectivity, bandwitdth_matrix)
+    congestList = check_congest(port, connectivity, bandwitdth_matrix)
 
     flow_congest = find_flow_congest(congestList, connectivity)
     flow_congest = find_sort_flow(flow_congest, flow_priority)
@@ -122,23 +100,16 @@ def main_thread(G, period):
     pandas_portstat_write(port)
     pandas_n2n_write(flow)
     pandas_flowstat_write(flow)
-    if len(pre_temp) == 0:
-        pre_temp = pre_port.copy()
-
-    if len(port) != 0:
-        send_stat({"port":port, "pre":pre_temp})
+    
     # print(port[5][2]['tx_bytes'])
-    pre_temp = pre_port.copy()
+    
     # send_text(secondary_path)
     # send_text(port)
     # send_text(original_path)
     # send_text(secondary_path)
     # send_text(flow)
     # send_text(flow_priority)
-    
-    # send_text(portsum)
-    # send_text(port)
-    
+    send_stat(port)
     all_time = time.time()
     print('\n\n')
     print('---------------- Monitor ----------------')
@@ -227,7 +198,7 @@ def find_maxbanwidth(all_switch):
     sw_bw = all_switch.get("bandwidth").get("switch")
     link_matrix = [sw_bw.get(switch) for switch in sw_bw]
     return link_matrix
-def check_congest(portstat, predict_portstat, dpidcon, bandwitdth_matrix):
+def check_congest(portstat, dpidcon, bandwitdth_matrix):
     """
     dpidcon {dpid : {port: endDpid},...}
     congest_list {dpid: [port]}
@@ -238,34 +209,12 @@ def check_congest(portstat, predict_portstat, dpidcon, bandwitdth_matrix):
     global congest_count 
     global congest_interval
     global congest_interval_list
-    global before_congest_interval
 
     #FIND CONGESTION PORT
-    predict_congest_list = dict()
-    for dpid in predict_portstat:
-        for port_no in predict_portstat[dpid]:
-            tx_bytes = predict_portstat.get(dpid).get(port_no).get('tx_bytes')[0]
-            if dpidcon.get(dpid) == None:
-                continue
-            if dpidcon.get(dpid).get(port_no) == None:
-                continue
-            nDpid = dpidcon[dpid][port_no]
-            max_bandwidth = bandwitdth_matrix[dpid-1][nDpid-1]
-            if max_bandwidth == 0:
-                continue
-            if ((tx_bytes/interval)*8 >= (max_bandwidth*2**20)*0.7):
-                # send_text({'congest':[dpid, (tx_bytes/interval)*8, (max_bandwidth*2**20)*0.7]})
-                if dpid not in predict_congest_list.keys():
-                    predict_congest_list.update({dpid: [port_no]})
-                else:
-                    predict_congest_list[dpid].append(port_no)
-
     congest_list = dict()
     for dpid in portstat:
         for port_no in portstat[dpid]:
             tx_bytes = portstat.get(dpid).get(port_no).get('tx_bytes')[0]
-            if dpidcon.get(dpid) == None:
-                continue
             if dpidcon.get(dpid).get(port_no) == None:
                 continue
             nDpid = dpidcon[dpid][port_no]
@@ -278,28 +227,13 @@ def check_congest(portstat, predict_portstat, dpidcon, bandwitdth_matrix):
                     congest_list.update({dpid: [port_no]})
                 else:
                     congest_list[dpid].append(port_no)
-    
-
     accumulate_congest(congest_list)
     congest_interval += interval
-    if predict_congest_list != {}:
-        congest_interval_list.append(congest_interval)
-        # send_chat({'predict congest '+str(congest_interval): congest_count})
-        send_text({'predict congest':congest_interval})
-        
     if congest_list != {}:
         congest_count += 1
         congest_interval_list.append(congest_interval)
-        send_chat({'congest '+str(congest_interval): congest_count}) 
-        # if congest_interval - interval != before_congest_interval:
-        #     congest_count += 1
-        #     # congest_interval_list.append(congest_interval)
-        #     send_chat({'congest '+str(congest_interval): congest_count}) 
-        # else:
-        #     send_chat({'congest '+str(congest_interval): congest_count})
-        # before_congest_interval = congest_interval
-    
-    return predict_congest_list #sum_congest_list#congest_list #predict_congest_list
+        send_chat({'congest '+str(congest_interval): congest_count})
+    return congest_list
 
 def find_end2end(graph):
     #FIND N2N PORT
@@ -599,59 +533,3 @@ def reformat_flowstat(flowstat):
                 continue
             flowstat_renew.update({flowid: flowstat.get(dpid).get(flowid).get('byte_count')[0]})
     return flowstat_renew
-
-def perdic_portstat(portstat, dpidcon, timesteps):
-    global interval
-    global test_list
-    global scaler
-    temp_list = list()
-    temp_portstat = dict()
-    sort_dpid = sorted(dpidcon) # kit test
-    # for dpid in dpidcon:
-    for dpid in sort_dpid: # kit test
-        listport = dpidcon.get(dpid)
-        sort_listport = sorted(listport) # kit test
-        # for port_no in listport:
-        for port_no in sort_listport: # kit test
-            if dpid in [1, 5] and port_no in [3, 4]:
-                continue
-            temp_list.append(portstat.get(dpid).get(port_no).get('tx_bytes')[0]*8/interval)
-    #col lumn for dl
-    #1_port1	1_port2	2_port1	2_port2	3_port1	3_port2	4_port1	4_port2	5_port1	5_port2
-    col_dl = {1:[1,2], 2:[1,2], 3:[1,2], 4:[1,2], 5:[1,2]}
-    if len(temp_list) == 10:
-        # send_text({"work": temp_list})
-        test_list.append(temp_list)
-    #send_text(test_list)
-    if len(test_list) > timesteps:
-        test_list.pop(0)
-    if len(test_list) == timesteps:
-        # scaler = MinMaxScaler()
-        df = pd.DataFrame(test_list)
-        # dataset = scaler.fit_transform(df)
-        dataset = scaler.transform(df)
-        test_x = []
-        test_x.append(dataset[0:timesteps, :])
-        #print(dataset)
-        pre = reconstructed_model.predict(np.array(test_x))
-        pre = scaler.inverse_transform(pre)
-        n_index = 0
-        for dpid in col_dl.keys():
-            listport = col_dl.get(dpid)
-            tempport = dict()
-            for port_no in listport:
-                bw = max(0, pre[0][n_index])
-                bw = float(bw)
-                tempport.update({port_no: {'tx_bytes': [bw]}})
-                n_index += 1
-            temp_portstat.update({dpid: tempport})
-        return temp_portstat
-    return portstat
-
-# def sum_port(portstat, preport):
-#     port_sum = portstat.copy()
-#     preport_temp = preport.copy()
-#     for dpid in preport_temp.keys():
-#         for port_no in preport_temp[dpid].keys():
-#             port_sum[dpid].update({str(port_no)+"_dl": preport_temp.get(dpid).get(port_no)})
-#     return port_sum
