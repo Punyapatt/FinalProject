@@ -1,15 +1,16 @@
 import pandas as pd
+import numpy as np
 rename = {}
 list_csv = []
-file_name = 'csv_2'
+file_name = 'csv_random_amplitude_2'
 # Get all csv file for drop column 'portLOCAL' and change columns name.
 
 for i in range(5):
     df = pd.read_csv(file_name + '/portstat_' + str(i+1) + '.csv', index_col=None)
-    # print(df[:3])
+    df.where(df < 20000000, 20000000, inplace=True) # replacing values greater than a number in DataFrame
+    df.replace(0, 480, inplace=True) # Change 0 to 480
     for dp in df:
         rename[dp] = str(i+1)+'_'+dp
-       
     df.rename(columns = rename, inplace = True)
     # df = df.reset_index()
     list_csv.append(df)

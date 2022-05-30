@@ -14,6 +14,7 @@ import tensorflow as tf
 from pickle import load
 from tensorflow import keras
 from sklearn.preprocessing import MinMaxScaler
+from numpy import array
 
 global interval
 global original_path
@@ -28,8 +29,11 @@ global test_list
 global pre_temp
 global before_congest_interval
 global scaler
-reconstructed_model = keras.models.load_model("/home/user01/ryu/ryu/app/work/parallel_lstm_5steps.hdf5")
-scaler = load(open('/home/user01/ryu/ryu/app/work/scaler.pickle', 'rb'))
+global csv_check
+reconstructed_model = keras.models.load_model("/home/user01/ryu/ryu/app/work/BiLSTM_8steps.hdf5")
+scaler = load(open('/home/user01/ryu/ryu/app/work/std_scaler.pickle', 'rb'))
+# reconstructed_model = keras.models.load_model("/home/user01/ryu/ryu/app/work/parallel_lstm_5steps.hdf5")
+# scaler = load(open('/home/user01/ryu/ryu/app/work/scaler_min_max.pickle', 'rb'))
 original_path = dict()
 secondary_path = dict()
 congest_time = dict()
@@ -37,10 +41,10 @@ pre_temp = dict()
 congest_count = 0
 congest_interval = 0
 congest_interval_list = []
-timesteps = 5
+timesteps = 8
 test_list = []
 before_congest_interval = 0
-
+csv_check = True
 flow_priority = {}
 # {
 #     dpid : {
@@ -118,10 +122,11 @@ def main_thread(G, period):
     nx.set_edge_attributes(netgraph, update_w)
     netgraph = update_graph_avail(port, bandwitdth_matrix, connectivity, netgraph)
     link_congest = reformat_link_congest(flow_congest, flow, connectivity)
+    # link_congest = dict()
     
-    pandas_portstat_write(port)
-    pandas_n2n_write(flow)
-    pandas_flowstat_write(flow)
+    # pandas_portstat_write(port)
+    # pandas_n2n_write(flow)
+    # pandas_flowstat_write(flow)
     if len(pre_temp) == 0:
         pre_temp = pre_port.copy()
 
@@ -253,12 +258,23 @@ def check_congest(portstat, predict_portstat, dpidcon, bandwitdth_matrix):
             max_bandwidth = bandwitdth_matrix[dpid-1][nDpid-1]
             if max_bandwidth == 0:
                 continue
+            
+            # tx_bits = ((tx_bytes/interval)*8)+2000000 if (tx_bytes/interval)*8 > 13000000 else (tx_bytes/interval)*8
             if ((tx_bytes/interval)*8 >= (max_bandwidth*2**20)*0.7):
-                # send_text({'congest':[dpid, (tx_bytes/interval)*8, (max_bandwidth*2**20)*0.7]})
+            # if (tx_bits >= (max_bandwidth*2**20)*0.7):
                 if dpid not in predict_congest_list.keys():
                     predict_congest_list.update({dpid: [port_no]})
                 else:
                     predict_congest_list[dpid].append(port_no)
+                
+                # tx_port = portstat.get(dpid).get(port_no).get('tx_bytes')[0]
+                                
+                # if (tx_port/interval)*8 > 12000000:
+                #     send_text({'dpid':dpid, 'port':port_no,'portstat':(tx_port/interval)*8})
+                #     if dpid not in predict_congest_list.keys():
+                #         predict_congest_list.update({dpid: [port_no]})
+                #     else:
+                #         predict_congest_list[dpid].append(port_no)
 
     congest_list = dict()
     for dpid in portstat:
@@ -285,19 +301,21 @@ def check_congest(portstat, predict_portstat, dpidcon, bandwitdth_matrix):
     if predict_congest_list != {}:
         congest_interval_list.append(congest_interval)
         # send_chat({'predict congest '+str(congest_interval): congest_count})
-        send_text({'predict congest':congest_interval})
+        # send_text({'predict congest':congest_interval})
         
+    # if congest_list != {}:
+    #     congest_count += 1
+    #     congest_interval_list.append(congest_interval)
+    #     send_chat({'congest '+str(congest_interval): congest_count})
+    
     if congest_list != {}:
-        congest_count += 1
-        congest_interval_list.append(congest_interval)
-        send_chat({'congest '+str(congest_interval): congest_count}) 
-        # if congest_interval - interval != before_congest_interval:
-        #     congest_count += 1
-        #     # congest_interval_list.append(congest_interval)
-        #     send_chat({'congest '+str(congest_interval): congest_count}) 
-        # else:
-        #     send_chat({'congest '+str(congest_interval): congest_count})
-        # before_congest_interval = congest_interval
+        if congest_count == before_congest_interval:
+            congest_count += 1
+            send_chat({'congest '+str(congest_interval): congest_count}) 
+    else:
+        before_congest_interval = congest_count
+    
+        
     
     return predict_congest_list #sum_congest_list#congest_list #predict_congest_list
 
@@ -487,18 +505,29 @@ def first_write():
 
 def pandas_portstat_write(bwstat):
     global interval
+    global csv_check
     #path=/ryu/ryu/app/work/
-    for dpid in bwstat.keys():
-        port_bw = bwstat.get(dpid)
-        newdf = pd.DataFrame({})
-        for port_no in port_bw.keys():
-            newdf['port'+str(port_no)] = [port_bw.get(port_no).get('tx_bytes')[0]*8/interval]
-        try:
-            portstat_pandas = pd.read_csv("~/ryu/ryu/app/work/csv/portstat_"+str(dpid)+".csv")
-        except:
-            portstat_pandas = pd.DataFrame({})
-        portstat_pandas.append(newdf).to_csv("~/ryu/ryu/app/work/csv/portstat_"+str(dpid)+".csv", index=False)
-#run_multi(555)
+    sort_dpid = sorted(bwstat)
+    for dpid in sort_dpid:
+        port_bw = bwstat[dpid]
+        sort_port_bw = sorted(port_bw)
+        newdf = pd.DataFrame()
+        new_value = {}
+        for port_no in sort_port_bw:
+            new_value['port'+str(port_no)] = [port_bw.get(port_no).get('tx_bytes')[0]*8/interval]
+        newdf = pd.DataFrame(new_value)
+        # -------- Bug header --------------------------
+        if csv_check:
+            newdf.to_csv("~/ryu/ryu/app/work/csv/portstat_"+str(dpid)+".csv", mode='a', index=False)
+            csv_check = False
+        else:
+            newdf.to_csv("~/ryu/ryu/app/work/csv/portstat_"+str(dpid)+".csv", mode='a', index=False, header=False)
+        # try:
+            
+        #     portstat_pandas = pd.read_csv("~/ryu/ryu/app/work/csv/portstat_"+str(dpid)+".csv")
+        # except:
+        #     portstat_pandas = pd.DataFrame({})
+        # portstat_pandas.append(newdf).to_csv("~/ryu/ryu/app/work/csv/portstat_"+str(dpid)+".csv", index=False)
 
 def accumulate_congest(congest):
     global interval
@@ -613,7 +642,7 @@ def perdic_portstat(portstat, dpidcon, timesteps):
         sort_listport = sorted(listport) # kit test
         # for port_no in listport:
         for port_no in sort_listport: # kit test
-            if dpid in [1, 5] and port_no in [3, 4]:
+            if dpid in [1, 5] and port_no in [3, 4, 5]:
                 continue
             temp_list.append(portstat.get(dpid).get(port_no).get('tx_bytes')[0]*8/interval)
     #col lumn for dl
@@ -628,12 +657,14 @@ def perdic_portstat(portstat, dpidcon, timesteps):
     if len(test_list) == timesteps:
         # scaler = MinMaxScaler()
         df = pd.DataFrame(test_list)
-        # dataset = scaler.fit_transform(df)
         dataset = scaler.transform(df)
-        test_x = []
-        test_x.append(dataset[0:timesteps, :])
-        #print(dataset)
-        pre = reconstructed_model.predict(np.array(test_x))
+        # test_x = []
+        # test_x.append(dataset[0:timesteps, :])
+        test_x = array(dataset[0:timesteps, :])
+        test_x = dataset.reshape((1, timesteps, 10))
+        # print('Test X :',test_x)
+        # pre = reconstructed_model.predict(np.array(test_x))
+        pre = reconstructed_model.predict(test_x)
         pre = scaler.inverse_transform(pre)
         n_index = 0
         for dpid in col_dl.keys():
@@ -642,16 +673,8 @@ def perdic_portstat(portstat, dpidcon, timesteps):
             for port_no in listport:
                 bw = max(0, pre[0][n_index])
                 bw = float(bw)
-                tempport.update({port_no: {'tx_bytes': [bw]}})
+                tempport.update({port_no: {'tx_bytes': [(bw/8)*interval]}})
                 n_index += 1
             temp_portstat.update({dpid: tempport})
         return temp_portstat
     return portstat
-
-# def sum_port(portstat, preport):
-#     port_sum = portstat.copy()
-#     preport_temp = preport.copy()
-#     for dpid in preport_temp.keys():
-#         for port_no in preport_temp[dpid].keys():
-#             port_sum[dpid].update({str(port_no)+"_dl": preport_temp.get(dpid).get(port_no)})
-#     return port_sum
